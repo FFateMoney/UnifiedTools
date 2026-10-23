@@ -14,27 +14,61 @@ private func color(forPercent percent: Double) -> Color {
 
 /// The overview page: how hot, full and busy this Mac is right now.
 struct SystemStatusView: View {
+    private enum Route {
+        case home, cpu, memory, network
+    }
+
     @State private var monitor = SystemMonitor.shared
+    @State private var route = Route.home
 
     var body: some View {
+        Group {
+            switch route {
+            case .home:
+                home
+            case .cpu:
+                ProcessDetailView(title: "处理器", ranking: .cpu, processes: .shared) { route = .home }
+            case .memory:
+                MemoryDetailView(system: monitor, processes: .shared) { route = .home }
+            case .network:
+                ProcessDetailView(title: "网络", ranking: .network, processes: .shared) { route = .home }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { monitor.start() }
+        .onDisappear { monitor.stop() }
+    }
+
+    /// A card that opens its detail page when clicked.
+    private func opening<Card: View>(_ destination: Route, _ card: Card) -> some View {
+        Button { route = destination } label: {
+            card.overlay(alignment: .topTrailing) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .padding(14)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("点击查看详情")
+    }
+
+    private var home: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
-                    cpuCard
-                    memoryCard
+                    opening(.cpu, cpuCard)
+                    opening(.memory, memoryCard)
                     storageCard
                     temperatureCard
-                    networkCard
+                    opening(.network, networkCard)
                     if monitor.gpuPercent != nil { gpuCard }
                     if monitor.battery != nil { batteryCard }
                 }
             }
             .padding(20)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { monitor.start() }
-        .onDisappear { monitor.stop() }
     }
 
     private var header: some View {

@@ -23,12 +23,21 @@ struct MemoryInfo {
     var app: UInt64 = 0
     var wired: UInt64 = 0
     var compressed: UInt64 = 0
+    /// File-backed and purgeable pages: kept only as a cache, so macOS can drop them instantly.
+    var cached: UInt64 = 0
+    /// How big the compressed pages would be if they were not compressed.
+    var compressedOriginal: UInt64 = 0
     var swapUsed: UInt64 = 0
     var swapTotal: UInt64 = 0
     /// 1 normal, 2 warning, 4 critical.
     var pressure = 1
 
     var used: UInt64 { app + wired + compressed }
+    /// Memory nothing is using at all.
+    var free: UInt64 { total > used + cached ? total - used - cached : 0 }
+    /// What a new program can get without anything being pushed to disk.
+    var available: UInt64 { free + cached }
+    var compressionSaved: UInt64 { compressedOriginal > compressed ? compressedOriginal - compressed : 0 }
 }
 
 struct BatteryInfo {
@@ -83,6 +92,8 @@ enum SystemStats {
             memory.app = UInt64(statistics.internal_page_count &- statistics.purgeable_count) * page
             memory.wired = UInt64(statistics.wire_count) * page
             memory.compressed = UInt64(statistics.compressor_page_count) * page
+            memory.cached = UInt64(statistics.external_page_count &+ statistics.purgeable_count) * page
+            memory.compressedOriginal = UInt64(statistics.total_uncompressed_pages_in_compressor) * page
         }
 
         var swap = xsw_usage()

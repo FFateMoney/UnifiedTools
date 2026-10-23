@@ -12,6 +12,8 @@ struct UnifiedToolsApp: App {
         ModuleRegistry.shared.register(NewFileModule())
         ModuleRegistry.shared.register(AppManagerModule())
         ModuleRegistry.shared.startEnabled()
+        // Slow background sampling, so memory growth over hours is on record when the page is opened.
+        ProcessMonitor.shared.start()
     }
 
     var body: some Scene {
