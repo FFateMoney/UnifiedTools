@@ -41,9 +41,19 @@ struct ProcessListView: View {
 
     private var rows: [AppUsage] {
         monitor.apps
-            .filter { !hideSystem || !$0.isSystem || $0.cpuPercent > 5 }
+            // Strictly by kind, never by current load: a row that hovers around a threshold would flicker in and out.
+            .filter { !hideSystem || !$0.isSystem }
             .filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
             .sorted(using: sortOrder)
+    }
+
+    private var hiddenSummary: String? {
+        guard hideSystem else { return nil }
+        let hidden = monitor.apps.filter(\.isSystem)
+        guard !hidden.isEmpty else { return nil }
+        let cpu = hidden.reduce(0) { $0 + $1.cpuPercent }
+        let memory = hidden.reduce(UInt64(0)) { $0 + $1.footprint }
+        return "已隐藏 \(hidden.count) 项 macOS 系统进程,合计处理器 \(String(format: "%.1f", cpu))%、内存 \(memoryText(memory))"
     }
 
     var body: some View {
@@ -64,6 +74,9 @@ struct ProcessListView: View {
                 .frame(height: height)
                 .frame(minHeight: height ?? 240)
 
+            if let hiddenSummary {
+                Text(hiddenSummary).font(.caption).foregroundStyle(.secondary)
+            }
             if !monitor.hasNetworkData {
                 Text("网络用量正在统计,约需 4 秒。").font(.caption).foregroundStyle(.secondary)
             }
@@ -104,7 +117,10 @@ struct ProcessListView: View {
                         if let note = app.explanation {
                             Text(note).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                         } else if app.processCount > 1 {
-                            Text("\(app.processCount) 个进程").font(.caption2).foregroundStyle(.secondary)
+                            Text(app.helperCount > 0
+                                ? "\(app.processCount) 个进程(含 \(app.helperCount) 个系统辅助进程)"
+                                : "\(app.processCount) 个进程")
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     if app.isProtected {
@@ -143,6 +159,7 @@ struct ProcessListView: View {
         if app.rawName != app.name { lines.append("进程名:\(app.rawName)") }
         if let note = app.explanation { lines.append(note) }
         if !app.executablePath.isEmpty { lines.append("位置:\(app.executablePath)") }
+        if app.helperCount > 0 { lines.append("其中 \(app.helperCount) 个是 macOS 替它工作的辅助进程(网页内容、着色器编译等),已计入它的占用") }
         lines.append("进程数:\(app.processCount)(进程号 \(app.pids.prefix(6).map(String.init).joined(separator: ", "))\(app.pids.count > 6 ? "…" : ""))")
         return lines.joined(separator: "\n")
     }

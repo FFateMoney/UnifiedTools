@@ -10,6 +10,8 @@ struct AppUsage: Identifiable {
     /// The `.app` bundle, or nil for command-line tools and system services.
     let bundlePath: String?
     let pids: [pid_t]
+    /// How many of those are macOS helper processes (web content, shader compiler...) working for this app.
+    var helperCount = 0
     /// Path of one of its executables, used to tell macOS's own services from your programs.
     let executablePath: String
     var cpuPercent: Double
@@ -148,21 +150,38 @@ final class ProcessMonitor {
             var bundlePath: String?
             var path = ""
             var pids: [pid_t] = []
+            var helpers = 0
             var cpu = 0.0
             var footprint: UInt64 = 0
         }
+        // First decide each process's own group, then fold system helpers into the app they work for.
+        var ownKey: [pid_t: String] = [:]
+        for sample in samples {
+            ownKey[sample.pid] = ProcessSampler.appBundlePath(for: sample.path) ?? "proc:" + sample.name
+        }
+
         var byKey: [String: Accumulator] = [:]
         for sample in samples {
             let bundle = ProcessSampler.appBundlePath(for: sample.path)
-            let key = bundle ?? "proc:" + sample.name
+            var key = ownKey[sample.pid] ?? "proc:" + sample.name
+            var isHelper = false
+            if bundle == nil, sample.responsiblePID > 0,
+               let ownerKey = ownKey[sample.responsiblePID], !ownerKey.hasPrefix("proc:"), ownerKey != key {
+                key = ownerKey
+                isHelper = true
+            }
+
             var entry = byKey[key] ?? Accumulator()
             if entry.name.isEmpty {
-                entry.name = displayName(key: key, bundlePath: bundle, fallback: sample.name)
-                entry.bundlePath = bundle
-                entry.rawName = sample.name
-                entry.path = sample.path
+                // The group is named after its app, which is the first process seen unless it was a helper.
+                let groupBundle = key.hasPrefix("proc:") ? nil : key
+                entry.name = displayName(key: key, bundlePath: groupBundle, fallback: sample.name)
+                entry.bundlePath = groupBundle
+                entry.rawName = isHelper ? (groupBundle as NSString?)?.lastPathComponent ?? sample.name : sample.name
+                entry.path = isHelper ? key : sample.path
             }
             entry.pids.append(sample.pid)
+            if isHelper { entry.helpers += 1 }
             entry.cpu += cpuByPid[sample.pid] ?? 0
             entry.footprint += sample.footprint
             byKey[key] = entry
@@ -176,6 +195,7 @@ final class ProcessMonitor {
                 rawName: entry.rawName,
                 bundlePath: entry.bundlePath,
                 pids: entry.pids,
+                helperCount: entry.helpers,
                 executablePath: entry.path,
                 cpuPercent: entry.cpu,
                 footprint: entry.footprint,

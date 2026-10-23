@@ -10,7 +10,14 @@ struct ProcessSample: Sendable {
     let footprint: UInt64
     /// Total user + system CPU time the process has used so far, in nanoseconds.
     let cpuNanoseconds: UInt64
+    /// The app that caused this process to run (the one macOS bills it to), when that is not itself.
+    let responsiblePID: pid_t
 }
+
+// Exported by libSystem but not declared in any header: what Activity Monitor uses to say that a
+// WebKit or Metal helper is working on behalf of a particular app.
+@_silgen_name("responsibility_get_pid_responsible_for_pid")
+private func responsibility_get_pid_responsible_for_pid(_ pid: pid_t) -> pid_t
 
 enum ProcessSampler {
     private nonisolated static let timebase: (numer: UInt64, denom: UInt64) = {
@@ -46,13 +53,21 @@ enum ProcessSampler {
             let path = pathLength > 0 ? String(cString: pathBuffer) : ""
             let name = path.isEmpty ? "pid \(pid)" : (path as NSString).lastPathComponent
 
+            // Only helpers that live outside any app bundle need an owner; apps are their own.
+            var owner: pid_t = 0
+            if appBundlePath(for: path) == nil {
+                let responsible = responsibility_get_pid_responsible_for_pid(pid)
+                if responsible > 0, responsible != pid { owner = responsible }
+            }
+
             let ticks = usage.ri_user_time &+ usage.ri_system_time
             samples.append(ProcessSample(
                 pid: pid,
                 path: path,
                 name: name,
                 footprint: usage.ri_phys_footprint,
-                cpuNanoseconds: ticks &* timebase.numer / timebase.denom
+                cpuNanoseconds: ticks &* timebase.numer / timebase.denom,
+                responsiblePID: owner
             ))
         }
         return samples
