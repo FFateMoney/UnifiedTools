@@ -72,6 +72,19 @@ final class MainWindowController {
 
         window.center()
         window.setFrameAutosaveName("UnifiedToolsMainWindow")
+
+        // Closed, minimised or covered windows need no live numbers; the monitors drop to their idle rhythm.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak window] _ in
+            let visible = window?.occlusionState.contains(.visible) ?? false
+            Task { @MainActor in
+                SystemMonitor.shared.setWindowVisible(visible)
+                ProcessMonitor.shared.setWindowVisible(visible)
+            }
+        }
         return window
     }
 }

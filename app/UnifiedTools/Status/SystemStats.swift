@@ -218,33 +218,51 @@ enum SystemStats {
     // MARK: - Temperature
 
     private nonisolated(unsafe) static var hidClient: UnsafeMutableRawPointer?
+    private nonisolated(unsafe) static var hidServices: CFArray?
+    private nonisolated(unsafe) static var chosenSensors: [(name: String, service: UnsafeRawPointer)] = []
 
-    /// Die and board temperature sensors (Apple Silicon). Empty when the Mac exposes none.
+    /// A few die and board temperature sensors (Apple Silicon). Empty when the Mac exposes none.
+    ///
+    /// Reading one sensor costs about a millisecond and there are over forty, so the set is narrowed once to
+    /// ten spread-out die sensors plus the SSD and battery, and the services are kept for later calls.
     nonisolated static func temperatures() -> [TemperatureSensor] {
         if hidClient == nil {
-            hidClient = IOHIDEventSystemClientCreate(kCFAllocatorDefault)
-            if let client = hidClient {
-                let matching: [String: Any] = ["PrimaryUsagePage": 0xFF00, "PrimaryUsage": 5]
-                _ = IOHIDEventSystemClientSetMatching(client, matching as CFDictionary)
-            }
+            chooseSensors()
         }
-        guard let client = hidClient, let services = IOHIDEventSystemClientCopyServices(client)?.takeRetainedValue() else {
-            return []
-        }
-
         var sensors: [TemperatureSensor] = []
-        for index in 0..<CFArrayGetCount(services) {
-            guard let service = CFArrayGetValueAtIndex(services, index),
-                  let name = IOHIDServiceClientCopyProperty(service, "Product" as CFString)?.takeRetainedValue() as? String,
-                  let event = IOHIDServiceClientCopyEvent(service, 15, 0, 0)
-            else { continue }
+        for (name, service) in chosenSensors {
+            guard let event = IOHIDServiceClientCopyEvent(service, 15, 0, 0) else { continue }
             let celsius = IOHIDEventGetFloatValue(event, 15 << 16)
             Unmanaged<CFTypeRef>.fromOpaque(event).release()
             if celsius > 0 && celsius < 150 {
                 sensors.append(TemperatureSensor(name: name, celsius: celsius))
             }
         }
-        return sensors.sorted { $0.name < $1.name }
+        return sensors
+    }
+
+    private nonisolated static func chooseSensors() {
+        hidClient = IOHIDEventSystemClientCreate(kCFAllocatorDefault)
+        guard let client = hidClient else { return }
+        let matching: [String: Any] = ["PrimaryUsagePage": 0xFF00, "PrimaryUsage": 5]
+        _ = IOHIDEventSystemClientSetMatching(client, matching as CFDictionary)
+        guard let services = IOHIDEventSystemClientCopyServices(client)?.takeRetainedValue() else { return }
+        hidServices = services   // keeps every service pointer below valid
+
+        var named: [(name: String, service: UnsafeRawPointer)] = []
+        for index in 0..<CFArrayGetCount(services) {
+            guard let service = CFArrayGetValueAtIndex(services, index),
+                  let name = IOHIDServiceClientCopyProperty(service, "Product" as CFString)?.takeRetainedValue() as? String
+            else { continue }
+            named.append((name, service))
+        }
+
+        let dies = named.filter { $0.name.contains("tdie") }.sorted { $0.name < $1.name }
+        let stride = max(dies.count / 10, 1)
+        var chosen = dies.enumerated().filter { $0.offset % stride == 0 }.prefix(10).map(\.element)
+        if let nand = named.first(where: { $0.name.contains("NAND") }) { chosen.append(nand) }
+        chosen.append(contentsOf: named.filter { $0.name.contains("gas gauge") }.prefix(2))
+        chosenSensors = chosen
     }
 
     // MARK: - Machine

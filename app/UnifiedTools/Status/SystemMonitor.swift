@@ -18,7 +18,7 @@ final class SystemMonitor {
         let storage: (total: Int64, available: Int64)?
         let gpu: Int?
         let battery: BatteryInfo?
-        let sensors: [TemperatureSensor]
+        let sensors: [TemperatureSensor]?
     }
 
     // Machine
@@ -55,6 +55,9 @@ final class SystemMonitor {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var previous: Snapshot?
     @ObservationIgnored private var sampling = false
+    @ObservationIgnored private var tick = 0
+    @ObservationIgnored private var wanted = false
+    @ObservationIgnored private var windowVisible = true
 
     // MARK: - Derived temperatures
 
@@ -75,15 +78,35 @@ final class SystemMonitor {
 
     // MARK: - Control
 
+    /// The overview page asks for samples while it is on screen.
     func start() {
-        guard timer == nil else { return }
-        sample()
-        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.sample() }
-        }
+        wanted = true
+        resumeIfPossible()
     }
 
     func stop() {
+        wanted = false
+        pause()
+    }
+
+    /// Nothing to show while the window is closed, minimised or fully covered, so stop sampling.
+    func setWindowVisible(_ visible: Bool) {
+        windowVisible = visible
+        if visible { resumeIfPossible() } else { pause() }
+    }
+
+    private func resumeIfPossible() {
+        guard wanted, windowVisible, timer == nil else { return }
+        tick = 0
+        sample()
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.sample() }
+        }
+        timer.tolerance = 0.4   // lets macOS batch our wake-ups with other work
+        self.timer = timer
+    }
+
+    private func pause() {
         timer?.invalidate()
         timer = nil
         previous = nil
@@ -92,16 +115,20 @@ final class SystemMonitor {
     private func sample() {
         guard !sampling else { return }
         sampling = true
+        // Cheap figures every time; the ones that cost milliseconds only now and then.
+        let withTemperature = tick % 5 == 0
+        let withStorage = tick % 30 == 0
+        tick += 1
         Task {
             let snapshot = await Task.detached(priority: .utility) {
                 Snapshot(
                     ticks: SystemStats.cpuTicks(),
                     network: SystemStats.networkCounters(),
                     memory: SystemStats.memory(),
-                    storage: SystemStats.storage(),
+                    storage: withStorage ? SystemStats.storage() : nil,
                     gpu: SystemStats.gpuUtilization(),
                     battery: SystemStats.battery(),
-                    sensors: SystemStats.temperatures()
+                    sensors: withTemperature ? SystemStats.temperatures() : nil
                 )
             }.value
             apply(snapshot)
@@ -136,7 +163,7 @@ final class SystemMonitor {
         }
         gpuPercent = snapshot.gpu
         battery = snapshot.battery
-        sensors = snapshot.sensors
+        if let sensors = snapshot.sensors { self.sensors = sensors }
         thermalState = ProcessInfo.processInfo.thermalState
         uptime = ProcessInfo.processInfo.systemUptime
 

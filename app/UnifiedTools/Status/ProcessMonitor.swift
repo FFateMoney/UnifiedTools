@@ -57,6 +57,7 @@ final class ProcessMonitor {
     @ObservationIgnored private var liveCount = 0
     @ObservationIgnored private var networkCount = 0
     @ObservationIgnored private var sampling = false
+    @ObservationIgnored private var windowVisible = true
 
     @ObservationIgnored private var previousCPU: [pid_t: (nanoseconds: UInt64, date: Date)] = [:]
     @ObservationIgnored private var names: [String: String] = [:]
@@ -76,48 +77,66 @@ final class ProcessMonitor {
         guard timer == nil else { return }
         observingSince = Date()
         sample()
-        schedule(interval: Self.slowInterval)
+        reschedule()
     }
 
     /// A detail page is on screen: sample every 2 seconds until the matching `endLive`.
     func beginLive() {
         liveCount += 1
         if liveCount == 1 {
-            schedule(interval: Self.fastInterval)
+            reschedule()
             sample()
         }
     }
 
     func endLive() {
         liveCount = max(liveCount - 1, 0)
-        if liveCount == 0 { schedule(interval: Self.slowInterval) }
+        if liveCount == 0 { reschedule() }
     }
 
     func beginNetwork() {
         networkCount += 1
-        guard networkCount == 1 else { return }
-        let stream = NetworkTrafficStream { [weak self] rates in
-            Task { @MainActor in self?.apply(networkRates: rates) }
-        }
-        stream.start()
-        self.stream = stream
+        updateNetworkStream()
     }
 
     func endNetwork() {
         networkCount = max(networkCount - 1, 0)
-        guard networkCount == 0 else { return }
-        stream?.stop()
-        stream = nil
-        networkByPid = [:]
-        hasNetworkData = false
-        rebuild()
+        updateNetworkStream()
     }
 
-    private func schedule(interval: TimeInterval) {
+    /// While the window is closed, minimised or covered, fall back to the slow background rhythm and stop `nettop`.
+    func setWindowVisible(_ visible: Bool) {
+        windowVisible = visible
+        reschedule()
+        updateNetworkStream()
+        if visible && liveCount > 0 { sample() }
+    }
+
+    private func updateNetworkStream() {
+        let wanted = networkCount > 0 && windowVisible
+        if wanted, stream == nil {
+            let stream = NetworkTrafficStream { [weak self] rates in
+                Task { @MainActor in self?.apply(networkRates: rates) }
+            }
+            stream.start()
+            self.stream = stream
+        } else if !wanted, let running = stream {
+            running.stop()
+            stream = nil
+            networkByPid = [:]
+            hasNetworkData = false
+            rebuild()
+        }
+    }
+
+    private func reschedule() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        let interval = (liveCount > 0 && windowVisible) ? Self.fastInterval : Self.slowInterval
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sample() }
         }
+        timer.tolerance = interval * 0.2   // lets macOS batch our wake-ups with other work
+        self.timer = timer
     }
 
     // MARK: - Sampling

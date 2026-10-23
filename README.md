@@ -26,6 +26,12 @@ macOS 14 及以上,Apple 芯片上开发和使用,Swift + SwiftUI + AppKit。
 2. 在两个 target(`UnifiedTools`、`NewFileExtension`)的 Signing & Capabilities 里,把 Team 换成你自己的。**Bundle Identifier 也要换成你自己的**,否则会和作者的冲突
 3. 编译运行
 
+日常使用请装 Release 版(比 Xcode 直接运行的 Debug 版省资源得多):
+
+```bash
+script/install-release.sh
+```
+
 固定的签名身份很重要:系统按签名记住屏幕录制、辅助功能、输入监控的授权,每次用不同的临时签名(ad-hoc)重新编译都会让授权失效。证书一直被判无效时,先检查系统时钟是否准确,详见 [doc/setup/signing.md](doc/setup/signing.md)。
 
 ## 权限
@@ -49,8 +55,9 @@ Finder 右键菜单是 Finder 扩展,需要在 系统设置 → 通用 → 登�
 ## 目录
 
 ```
-app/    Xcode 工程和源码
-doc/    设计、规范和环境配置文档(从 doc/index.md 看起)
+app/     Xcode 工程和源码
+doc/     设计、规范和环境配置文档(从 doc/index.md 看起)
+script/  构建和安装脚本
 ```
 
 根目录只放文件夹,加上仓库必需的 `.gitignore`、`LICENSE`、`README.md`。规则见 [doc/conventions/directory-rules.md](doc/conventions/directory-rules.md)。
